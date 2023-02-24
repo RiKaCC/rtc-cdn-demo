@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 
@@ -53,4 +54,40 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	defer pc.Close()
 
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		log.Printf("create offer failed, %s", err.Error())
+		return
+	}
+
+	if err = pc.SetLocalDescription(offer); err != nil {
+		log.Printf("set local descripetion failed, %s", err)
+		return
+	}
+
+	p.sendSignal("offer", pc.LocalDescription().SDP)
+}
+
+type signalMessage struct {
+	Type string `json:"type"`
+	SDP  string `json:"sdp"`
+}
+
+func (p *peer) sendSignal(signalType string, sdp string) {
+	log.Printf("sending signal %s", signalType)
+	msg := signalMessage{
+		Type: signalType,
+		SDP:  sdp,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("json signal message failed, %s", err.Error())
+		return
+	}
+
+	if err = p.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("websocket send signal messge failed, %s", err.Error())
+		return
+	}
 }
