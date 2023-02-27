@@ -1,17 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
 )
 
 func main() {
-	http.HandleFunc("/connect", handleConnect)
-	err := http.ListenAndServe(":8080", nil)
+	http.HandleFunc("/rtc", handleConnect)
+	log.Println("Listen on http://localhost:7880/rtc")
+	err := http.ListenAndServe(":7880", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -37,7 +41,6 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	p := &peer{conn: conn}
-
 	rtcConfig := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			webrtc.ICEServer{
@@ -45,27 +48,42 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	}
+	pc := createPeerConnection(rtcConfig)
 
-	pc, err := webrtc.NewPeerConnection(rtcConfig)
+	var candidatesMux sync.Mutex
+	pendingCandidates := make([]*webrtc.ICECandidate, 0)
+
+	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		log.Printf("Got ICE Candidate %#v", candidate)
+		if candidate == nil {
+			return
+		}
+
+		candidatesMux.Lock()
+		defer candidatesMux.Unlock()
+
+		desc := pc.RemoteDescription()
+		if desc == nil {
+			pendingCandidates = append(pendingCandidates, candidate)
+		} else if onICECandidateErr := signalCandidate() {
+
+		}
+
+	})
+}
+
+func signalCandidate(addr string, c *webrtc.ICECandidate) error {
+	payload := []byte(c.ToJSON().Candidate)
+	resp, err := http.Post(fmt.Sprintf("http://%s/candidate", addr), "application/json; charset=utf-8", bytes.NewReader(payload))
 	if err != nil {
-		log.Printf("failed to create peerconnection: %s", err.Error())
-		return
+		return err
 	}
 
-	defer pc.Close()
-
-	offer, err := pc.CreateOffer(nil)
-	if err != nil {
-		log.Printf("create offer failed, %s", err.Error())
-		return
+	if err = resp.Body.Close(); err != nil {
+		return err
 	}
 
-	if err = pc.SetLocalDescription(offer); err != nil {
-		log.Printf("set local descripetion failed, %s", err)
-		return
-	}
-
-	p.sendSignal("offer", pc.LocalDescription().SDP)
+	return nil
 }
 
 type signalMessage struct {
